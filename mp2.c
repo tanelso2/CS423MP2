@@ -17,6 +17,58 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Group_06");
 MODULE_DESCRIPTION("CS-423 MP2");
 
+//for the /proc/mp2 directory
+static struct proc_dir_entry *proc_dir;
+//for the /proc/mp2/status file
+static struct proc_dir_entry *proc_entry;
+
+void mp2_register(void) {
+	printk(KERN_INFO "register called\n");
+}
+
+void mp2_yield(void) {
+	printk(KERN_INFO "yield called\n");
+}
+
+void mp2_deregister(void) {
+	printk(KERN_INFO "deregister called\n");
+}
+
+static char input_buf[80];
+
+static ssize_t mp2_write(struct file *file, const char __user *buffer, size_t count, loff_t *data) {
+	if (copy_from_user(input_buf, buffer, count) ) {
+		return -EFAULT;
+	}
+
+	switch (input_buf[0]) {
+		case 'R':
+			mp2_register();
+			break;
+		case 'Y':
+			mp2_yield();
+			break;
+		case 'D':
+			mp2_deregister();
+			break;
+		default:
+			printk(KERN_ALERT "invalid write to proc/mp2/status\n");
+			break;
+	}
+
+	return count;
+}
+
+static ssize_t mp2_read(struct file *file, char __user *buffer, size_t count, loff_t *data) {
+	return count; //TODO change
+}
+
+//struct for the status procfile.
+static const struct file_operations mp2_file = {
+	.owner = THIS_MODULE,
+	.read = mp2_read,
+	.write = mp2_write,
+};
 
 /*
  * mp2_init - Called when module is loaded
@@ -28,12 +80,15 @@ int __init mp2_init(void)
 	printk(KERN_ALERT "MP2 MODULE LOADING\n");
 	#endif
 
+	proc_dir = proc_mkdir("mp2", NULL); 
+	proc_entry = proc_create("status", 0666, proc_dir, &mp2_file);
+
 	printk(KERN_ALERT "MP2 MODULE LOADED\n");
 	return 0;
 }
 
 /*
- * mp1_exit - Called when module is unloaded
+ * mp2_exit - Called when module is unloaded
  * Gets rid of the data structures
  */
 void __exit mp2_exit(void)
@@ -41,6 +96,10 @@ void __exit mp2_exit(void)
 	#ifdef DEBUG
 	printk(KERN_ALERT "MP2 MODULE UNLOADING\n");
 	#endif
+
+	remove_proc_entry("status", proc_dir);
+	remove_proc_entry("mp2", NULL);
+
 	printk(KERN_ALERT "MP2 MODULE UNLOADED\n");
 }
 
