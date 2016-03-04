@@ -71,6 +71,21 @@ void mp2_yield(void) {
 
 void mp2_deregister(void) {
 	printk(KERN_INFO "deregister called\n");
+	int pid;
+	sscanf(input_buf, "D, %d", &pid);
+
+	struct list_head *pos, *q;
+	struct mp2_task_struct *curr;
+	
+	mutex_lock_interruptible(&list_lock);
+	list_for_each_safe(pos, q, &task_list) {
+		curr = list_entry(pos, struct mp2_task_struct, list);
+		if(curr->pid == pid) {
+			list_del(pos);
+			kmem_cache_free(mp2_cachep, curr);
+		}
+	}
+	mutex_unlock(&list_lock);
 }
 
 static ssize_t mp2_write(struct file *file, const char __user *buffer, size_t count, loff_t *data) {
