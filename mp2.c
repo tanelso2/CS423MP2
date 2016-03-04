@@ -7,6 +7,7 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/mutex.h> 
+#include <linux/sched.h>
 #include <linux/timer.h>
 #include <linux/workqueue.h>
 #include "mp2_given.h"
@@ -21,6 +22,14 @@ MODULE_DESCRIPTION("CS-423 MP2");
 static struct proc_dir_entry *proc_dir;
 //for the /proc/mp2/status file
 static struct proc_dir_entry *proc_entry;
+
+struct mp2_task_struct {
+	struct task_struct* linux_task;
+	int pid;
+	int period;
+	int computation;
+	//might need more. Not sure yet
+}
 
 void mp2_register(void) {
 	printk(KERN_INFO "register called\n");
