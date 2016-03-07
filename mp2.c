@@ -10,7 +10,6 @@
 #include <linux/mutex.h> 
 #include <linux/sched.h>
 #include <linux/timer.h>
-#include <linux/workqueue.h>
 #include "mp2_given.h"
 
 #define DEBUG 1
@@ -38,20 +37,26 @@ DEFINE_MUTEX(list_lock);
 struct mp2_task_struct {
 	struct task_struct* linux_task;
 	struct list_head list;
+    struct timer_list timer;
 
 	int pid;
 	int period;
 	int comp_time;
 	int task_state;
+    unsigned long prev_period;
 	//might need more. Not sure yet
 };
 
 struct mp2_task_struct * current_running_task = NULL;
 
+/**
+ * Function to run in the dispatch thread
+ */
 int dispatch_func(void* data) {
 	//TODO: Probably break this down more would be smart
 	struct mp2_task_struct *iter, *next_in_line;	
 	while (true) {
+        //set itself to sleep
 		set_current_state(TASK_INTERRUPTIBLE);
 		schedule();
 
@@ -89,6 +94,19 @@ int dispatch_func(void* data) {
 	}
 }
 
+/**
+ * When the timer goes off, set it to READY and wake up dispatch thread
+ */
+void timer_handler(unsigned long pid) {
+    struct mp2_task_struct *iter;
+    list_for_each_entry(iter, &task_list, list) {
+        if(iter->pid == pid) {
+            iter->task_state = TSK_READY;
+        }
+    }
+    wake_up_process(dispatch_thread);
+}
+
 static char input_buf[80];
 
 void mp2_register(void) {
@@ -105,14 +123,48 @@ void mp2_register(void) {
 
 	new_task_entry->linux_task = find_task_by_pid(new_task_entry->pid);	
 	new_task_entry->task_state = TSK_SLEEPING;
+    new_task_entry->prev_period = jiffies;
+
+    setup_timer(&new_task_entry->timer, timer_handler, new_task_entry->pid);
 
 	mutex_lock_interruptible(&list_lock);
 	list_add(&new_task_entry->list, &task_list);
 	mutex_unlock(&list_lock);
 }
 
+struct mp2_task_struct* find_task(int pid) {
+    struct mp2_task_struct *iter, *ret;
+    ret = NULL;
+    mutex_lock_interruptible(&list_lock);
+    list_for_each_entry(iter, &task_list, list) {
+        if(iter->pid == pid) {
+            ret = iter;
+        }
+    }
+    mutex_unlock(&list_lock);
+    return ret;
+}
+
 void mp2_yield(void) {
 	printk(KERN_INFO "yield called\n");
+    int pid;
+    sscanf(input_buf, "Y, %d", &pid);
+    struct mp2_task_struct *curr;
+    curr = find_task(pid);
+    if (curr == NULL) {
+        return;
+    }
+    unsigned long next_period = curr->prev_period + msecs_to_jiffies(curr->period);
+    if(next_period <= jiffies) {
+        /* Do Nothing because the next period has already started */
+    } else {
+        curr->task_state = TSK_SLEEPING;
+        set_task_state(curr->linux_task, TASK_UNINTERRUPTIBLE);
+        mod_timer(&curr->timer, next_period);
+    }
+
+    wake_up_process(dispatch_thread);
+
 }
 
 void mp2_deregister(void) {
@@ -127,6 +179,7 @@ void mp2_deregister(void) {
 	list_for_each_safe(pos, q, &task_list) {
 		curr = list_entry(pos, struct mp2_task_struct, list);
 		if(curr->pid == pid) {
+            del_timer(&curr->timer);
 			list_del(pos);
 			kmem_cache_free(mp2_cachep, curr);
 		}
@@ -220,6 +273,7 @@ void __exit mp2_exit(void) {
 	mutex_lock_interruptible(&list_lock);
 	list_for_each_safe(pos, q, &task_list) {
 		curr = list_entry(pos, struct mp2_task_struct, list);
+        del_timer(&curr->timer);
 		list_del(pos);
 		kmem_cache_free(mp2_cachep, curr);
 	}
