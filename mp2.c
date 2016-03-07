@@ -49,6 +49,17 @@ struct mp2_task_struct {
 
 struct mp2_task_struct * current_running_task = NULL;
 
+int can_be_admitted(int period, int comp_time) {
+    int sum;
+    struct mp2_task_struct *iter;
+    sum = 0;
+    list_for_each_entry(iter, &task_list, list) {
+        sum += (1000*iter->comp_time) / iter->period;
+    }
+    sum += (1000*comp_time) / period;
+    return sum <= 693;
+}
+
 /**
  * Function to run in the dispatch thread
  */
@@ -111,11 +122,20 @@ static char input_buf[80];
 
 void mp2_register(void) {
 	printk(KERN_INFO "register called\n");
+    int period, pid, comp_time;
 	struct mp2_task_struct * new_task_entry;
+
+	sscanf(input_buf, "R, %d, %d, %d", &pid, &period, &comp_time);
+
+    if(!can_be_admitted(period, comp_time) ) {
+        return;
+    }
 
 	new_task_entry = kmem_cache_alloc(mp2_cachep, GFP_KERNEL);
 
-	sscanf(input_buf, "R, %d, %d, %d", &new_task_entry->pid, &new_task_entry->period, &new_task_entry->comp_time);
+    new_task_entry->pid = pid;
+    new_task_entry->period = period;
+    new_task_entry->comp_time = comp_time;
 	
 	#ifdef DEBUG
 	printk(KERN_INFO "pid=%d, period=%d, comp_time=%d\n", new_task_entry->pid, new_task_entry->period, new_task_entry->comp_time);
@@ -179,6 +199,9 @@ void mp2_deregister(void) {
 	list_for_each_safe(pos, q, &task_list) {
 		curr = list_entry(pos, struct mp2_task_struct, list);
 		if(curr->pid == pid) {
+            if(curr == current_running_task) {
+                current_running_task = NULL;
+            }
             del_timer(&curr->timer);
 			list_del(pos);
 			kmem_cache_free(mp2_cachep, curr);
