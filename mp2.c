@@ -215,6 +215,8 @@ void __exit mp2_exit(void) {
 	struct list_head *pos, *q;
 	struct mp2_task_struct *curr;
 
+	kthread_stop(dispatch_thread);
+
 	mutex_lock_interruptible(&list_lock);
 	list_for_each_safe(pos, q, &task_list) {
 		curr = list_entry(pos, struct mp2_task_struct, list);
