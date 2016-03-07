@@ -6,6 +6,7 @@
 #include <linux/proc_fs.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/kthread.h>
 #include <linux/mutex.h> 
 #include <linux/sched.h>
 #include <linux/timer.h>
@@ -27,6 +28,8 @@ static struct proc_dir_entry *proc_dir;
 //for the /proc/mp2/status file
 static struct proc_dir_entry *proc_entry;
 
+static struct task_struct * dispatch_thread;
+
 struct kmem_cache * mp2_cachep;
 
 LIST_HEAD(task_list);
@@ -42,6 +45,49 @@ struct mp2_task_struct {
 	int task_state;
 	//might need more. Not sure yet
 };
+
+struct mp2_task_struct * current_running_task = NULL;
+
+int dispatch_func(void* data) {
+	//TODO: Probably break this down more would be smart
+	struct mp2_task_struct *iter, *next_in_line;	
+	while (true) {
+		set_current_state(TASK_INTERRUPTIBLE);
+		schedule();
+
+		iter = NULL;
+		next_in_line = NULL;
+		mutex_lock_interruptible(&list_lock);
+		list_for_each_entry(iter, &task_list, list) {
+			if (iter->task_state == TSK_READY && next_in_line == NULL) {
+				next_in_line = iter;
+			} else if (next_in_line != NULL && iter->period < next_in_line->period && iter->task_state == TSK_READY) {
+				next_in_line = iter;
+			}
+		}
+		mutex_unlock(&list_lock);
+		if(current_running_task != NULL) {
+			//stop the current running task
+			if(current_running_task->task_state == TSK_RUNNING) {
+				current_running_task->task_state = TSK_READY;
+			} else {
+				current_running_task->task_state = TSK_SLEEPING;
+			}
+			struct sched_param s;
+			s.sched_priority = 0;
+			sched_setscheduler(current_running_task->linux_task, SCHED_NORMAL, &s);
+		}
+		if (next_in_line != NULL) {
+			//set next in line to run 
+			next_in_line->task_state = TSK_RUNNING;
+			struct sched_param sparam;
+			wake_up_process(next_in_line->linux_task);
+			sparam.sched_priority = 99;
+			sched_setscheduler(next_in_line->linux_task, SCHED_FIFO, &sparam);
+			current_running_task = next_in_line;
+		}
+	}
+}
 
 static char input_buf[80];
 
@@ -150,6 +196,8 @@ int __init mp2_init(void) {
 	proc_entry = proc_create("status", 0666, proc_dir, &mp2_file);
 	
 	mp2_cachep = kmem_cache_create("mp2_tasks", sizeof(struct mp2_task_struct), ARCH_MIN_TASKALIGN, SLAB_PANIC, NULL);
+	
+	dispatch_thread = kthread_run(dispatch_func, NULL, "mp2 dispatch thread");
 
 	printk(KERN_ALERT "MP2 MODULE LOADED\n");
 	return 0;
