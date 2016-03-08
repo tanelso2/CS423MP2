@@ -33,6 +33,7 @@ struct kmem_cache * mp2_cachep;
 
 LIST_HEAD(task_list);
 DEFINE_MUTEX(list_lock);
+DEFINE_MUTEX(running_task_lock);
 
 struct mp2_task_struct {
 	struct task_struct* linux_task;
@@ -53,10 +54,12 @@ int can_be_admitted(int period, int comp_time) {
     int sum;
     struct mp2_task_struct *iter;
     sum = 0;
+	mutex_lock_interruptible(&list_lock);
     list_for_each_entry(iter, &task_list, list) {
         sum += (1000*iter->comp_time) / iter->period;
     }
-    sum += (1000*comp_time) / period;
+    mutex_unlock(&list_lock);
+	sum += (1000*comp_time) / period;
     return sum <= 693;
 }
 
@@ -64,12 +67,14 @@ int can_be_admitted(int period, int comp_time) {
  * Function to run in the dispatch thread
  */
 int dispatch_func(void* data) {
-	//TODO: Probably break this down more would be smart
+	//TODO: Probably breaking this down more would be smart
 	struct mp2_task_struct *iter, *next_in_line;	
-	while (true) {
+	while (!kthread_should_stop()) {
         //set itself to sleep
 		set_current_state(TASK_INTERRUPTIBLE);
 		schedule();
+		
+		printk(KERN_INFO "Going around the dispatch loop\n");
 
 		iter = NULL;
 		next_in_line = NULL;
@@ -81,7 +86,7 @@ int dispatch_func(void* data) {
 				next_in_line = iter;
 			}
 		}
-		mutex_unlock(&list_lock);
+		mutex_lock_interruptible(&running_task_lock);
 		if(current_running_task != NULL) {
 			//stop the current running task
 			if(current_running_task->task_state == TSK_RUNNING) {
@@ -92,7 +97,10 @@ int dispatch_func(void* data) {
 			struct sched_param s;
 			s.sched_priority = 0;
 			sched_setscheduler(current_running_task->linux_task, SCHED_NORMAL, &s);
+			
+			printk(KERN_INFO "Task %d put to sleep\n", current_running_task->pid);
 		}
+		mutex_unlock(&running_task_lock);
 		if (next_in_line != NULL) {
 			//set next in line to run 
 			next_in_line->task_state = TSK_RUNNING;
@@ -100,13 +108,19 @@ int dispatch_func(void* data) {
 			wake_up_process(next_in_line->linux_task);
 			sparam.sched_priority = 99;
 			sched_setscheduler(next_in_line->linux_task, SCHED_FIFO, &sparam);
+			mutex_lock_interruptible(&running_task_lock);
 			current_running_task = next_in_line;
+			mutex_unlock(&running_task_lock);
+			printk(KERN_INFO "Task %d is now running\n", next_in_line->pid);
 		}
+		mutex_unlock(&list_lock);
 	}
+	return 0;
 }
 
 /**
  * When the timer goes off, set it to READY and wake up dispatch thread
+ * INTERRUPT CONTEXT. Make sure it doesn't sleep
  */
 void timer_handler(unsigned long pid) {
     struct mp2_task_struct *iter;
@@ -115,6 +129,7 @@ void timer_handler(unsigned long pid) {
             iter->task_state = TSK_READY;
         }
     }
+	printk(KERN_INFO "Task %d woken up in timer interrupt\n", pid);
     wake_up_process(dispatch_thread);
 }
 
@@ -177,13 +192,21 @@ void mp2_yield(void) {
     unsigned long next_period = curr->prev_period + msecs_to_jiffies(curr->period);
     if(next_period <= jiffies) {
         /* Do Nothing because the next period has already started */
+		printk(KERN_ALERT "Failed to meet period for task %d\n", pid);
     } else {
         curr->task_state = TSK_SLEEPING;
         set_task_state(curr->linux_task, TASK_UNINTERRUPTIBLE);
         mod_timer(&curr->timer, next_period);
+		if (current_running_task == curr) {
+			mutex_lock_interruptible(&running_task_lock);
+			current_running_task = NULL;
+			mutex_unlock(&running_task_lock);
+		}
     }
+	curr->prev_period = next_period;
 
     wake_up_process(dispatch_thread);
+	printk(KERN_INFO "%d yielded\n", pid);
 
 }
 
@@ -199,13 +222,19 @@ void mp2_deregister(void) {
 	list_for_each_safe(pos, q, &task_list) {
 		curr = list_entry(pos, struct mp2_task_struct, list);
 		if(curr->pid == pid) {
+			mutex_lock_interruptible(&running_task_lock);
             if(curr == current_running_task) {
                 current_running_task = NULL;
             }
+			mutex_unlock(&running_task_lock);
             del_timer(&curr->timer);
 			list_del(pos);
 			kmem_cache_free(mp2_cachep, curr);
+			printk(KERN_INFO "Should have deregistered task %d\n", pid);
 		}
+	}
+	list_for_each_entry(curr, &task_list, list) {
+		printk(KERN_INFO "Going through the task list after degistering %d and I found %d\n", pid, curr->pid);
 	}
 	mutex_unlock(&list_lock);
 }
