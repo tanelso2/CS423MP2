@@ -10,6 +10,7 @@
 #include <linux/mutex.h> 
 #include <linux/sched.h>
 #include <linux/timer.h>
+#include <linux/string.h>
 #include "mp2_given.h"
 
 #define DEBUG 1
@@ -53,13 +54,16 @@ struct mp2_task_struct * current_running_task = NULL;
 int can_be_admitted(int period, int comp_time) {
     int sum;
     struct mp2_task_struct *iter;
+	printk(KERN_INFO "Admitting %d, %d\n", period, comp_time);
     sum = 0;
 	mutex_lock_interruptible(&list_lock);
     list_for_each_entry(iter, &task_list, list) {
         sum += (1000*iter->comp_time) / iter->period;
+		printk(KERN_INFO "sum is now %d\n", sum);
     }
     mutex_unlock(&list_lock);
 	sum += (1000*comp_time) / period;
+	printk(KERN_INFO "sum is finally %d\n", sum);
     return sum <= 693;
 }
 
@@ -106,7 +110,7 @@ int dispatch_func(void* data) {
 			next_in_line->task_state = TSK_RUNNING;
 			struct sched_param sparam;
 			wake_up_process(next_in_line->linux_task);
-			sparam.sched_priority = 99;
+			sparam.sched_priority = 90;
 			sched_setscheduler(next_in_line->linux_task, SCHED_FIFO, &sparam);
 			mutex_lock_interruptible(&running_task_lock);
 			current_running_task = next_in_line;
@@ -143,18 +147,18 @@ void mp2_register(void) {
 	sscanf(input_buf, "R, %d, %d, %d", &pid, &period, &comp_time);
 
     if(!can_be_admitted(period, comp_time) ) {
+		printk(KERN_ALERT "pid %d could not be registered!\n", pid);
         return;
     }
 
+	printk(KERN_INFO "Hooray you passed the admissions exams, %d!\n", pid);
 	new_task_entry = kmem_cache_alloc(mp2_cachep, GFP_KERNEL);
 
     new_task_entry->pid = pid;
     new_task_entry->period = period;
     new_task_entry->comp_time = comp_time;
 	
-	#ifdef DEBUG
 	printk(KERN_INFO "pid=%d, period=%d, comp_time=%d\n", new_task_entry->pid, new_task_entry->period, new_task_entry->comp_time);
-	#endif
 
 	new_task_entry->linux_task = find_task_by_pid(new_task_entry->pid);	
 	new_task_entry->task_state = TSK_SLEEPING;
@@ -187,6 +191,7 @@ void mp2_yield(void) {
     struct mp2_task_struct *curr;
     curr = find_task(pid);
     if (curr == NULL) {
+		printk(KERN_ALERT "Currently yielding task %d not found\n", pid);
         return;
     }
     unsigned long next_period = curr->prev_period + msecs_to_jiffies(curr->period);
@@ -213,7 +218,7 @@ void mp2_yield(void) {
 void mp2_deregister(void) {
 	printk(KERN_INFO "deregister called\n");
 	int pid;
-	sscanf(input_buf, "D, %d", &pid);
+	sscanf(input_buf, "D, %d", &pid); 
 
 	struct list_head *pos, *q;
 	struct mp2_task_struct *curr;
@@ -258,7 +263,7 @@ static ssize_t mp2_write(struct file *file, const char __user *buffer, size_t co
 			printk(KERN_ALERT "invalid write to proc/mp2/status\n");
 			break;
 	}
-
+	memset(input_buf, 0, 80);
 	return count;
 }
 
@@ -301,8 +306,11 @@ int __init mp2_init(void) {
 	proc_entry = proc_create("status", 0666, proc_dir, &mp2_file);
 	
 	mp2_cachep = kmem_cache_create("mp2_tasks", sizeof(struct mp2_task_struct), ARCH_MIN_TASKALIGN, SLAB_PANIC, NULL);
-	
+
+	struct sched_param sparam;	
 	dispatch_thread = kthread_run(dispatch_func, NULL, "mp2 dispatch thread");
+	sparam.sched_priority = 99;
+	sched_setscheduler(dispatch_thread, SCHED_FIFO, &sparam);
 
 	printk(KERN_ALERT "MP2 MODULE LOADED\n");
 	return 0;

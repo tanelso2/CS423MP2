@@ -7,9 +7,11 @@
 
 pid_t PID;
 
+const char* procfile_name = "/proc/mp2/status";
+
 void register_process(int period, int comp_time) {
 	FILE* procfile = fopen("/proc/mp2/status", "w");
-	fprintf(procfile, "R, %d, %d, %d", PID, period, comp_time);
+	fprintf(procfile, "R, %d, %d, %d\n", PID, period, comp_time);
 	fclose(procfile);
 }
 
@@ -38,14 +40,14 @@ int read_status(void) {
 
 void yield_process(void) {
 	FILE* procfile = fopen("/proc/mp2/status", "w");
-	fprintf(procfile, "Y, %d", PID);
+	fprintf(procfile, "Y, %d\n", PID);
 	fclose(procfile);
 }
 
 
 void deregister_process(void) {
 	FILE* procfile = fopen("/proc/mp2/status", "w");
-	fprintf(procfile, "D, %d", PID);
+	fprintf(procfile, "D, %d\n", PID);
 	fclose(procfile); 
 }
 
@@ -66,13 +68,12 @@ int main(int argc, char* argv[]) {
 	register_process(period, job_process_time); //Proc filesystem
 
 	//Proc filesystem: Verify the process was admitted if (!process in the list) exit 1;	
-	if (!read_status) {
+	if (!read_status()) {
 		exit(1);
 	}
 
 	//setup everything needed for real-time loop: t0=gettimeofday() YIELD(PID); //Proc filesystem	
 	struct timeval te;
-	yield_process();
 
 	//this is the real-time loop
 	int jobs = 5;
@@ -80,7 +81,14 @@ int main(int argc, char* argv[]) {
 	{
 		//wakeup_time=gettimeofday()-t0 and factorial computation
 		gettimeofday(&te, NULL);
+		long long sleep_time = (te.tv_sec*1000LL + te.tv_usec/1000);
+
+		yield_process();
+
+		gettimeofday(&te, NULL);
 		long long wakeup_time = (te.tv_sec*1000LL + te.tv_usec/1000);
+		printf("Process %d slept for %d ms\n", PID, (int) (wakeup_time - sleep_time));
+
 		//calculate lots of factorials for cpu time
      	int i;
 		for(i = 1; i < 20000000; i++) {
@@ -88,15 +96,16 @@ int main(int argc, char* argv[]) {
  	    }		
 			
 		//Proc filesystem. JobProcessTime=gettimeofday()-wakeup_time }
+		/*
 		gettimeofday(&te, NULL);
 		long long milliseconds = te.tv_sec*1000LL + te.tv_usec/1000;
-		int JobProcessTime = milliseconds - wakeup_time;		
+		int jobProcessTime = milliseconds - sleep_time;		
 
-		printf("Process %d took %d ms\n", PID, JobProcessTime);   	
-		yield_process();
+		printf("Process %d took %d ms\n", PID, jobProcessTime);   	
+		*/
 	}
+	
+	yield_process();
 	
 	deregister_process(); //Proc filesystem
 }
-
-
