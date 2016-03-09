@@ -9,14 +9,19 @@ pid_t PID;
 
 const char* procfile_name = "/proc/mp2/status";
 
+//Attempt to register process to procfile
 void register_process(int period, int comp_time) {
-	FILE* procfile = fopen("/proc/mp2/status", "w");
+	FILE* procfile = fopen(procfile_name, "w");
 	fprintf(procfile, "R, %d, %d, %d\n", PID, period, comp_time);
 	fclose(procfile);
 }
 
-int read_status(void) {
-	FILE* procfile = fopen("/proc/mp2/status", "r");
+/**
+ * Read from procfile and determine if this process
+ * was registered properly
+ */
+int was_registered(void) {
+	FILE* procfile = fopen(procfile_name, "r");
 	char line[256];
 	
 	int line_pid;
@@ -30,23 +35,19 @@ int read_status(void) {
     }
 	fclose(procfile);
 
-	if (pid_found) {
-		return 1;
-	} else {
-		return 0;
-	}
+	return pid_found;
 }
 
 
 void yield_process(void) {
-	FILE* procfile = fopen("/proc/mp2/status", "w");
+	FILE* procfile = fopen(procfile_name, "w");
 	fprintf(procfile, "Y, %d\n", PID);
 	fclose(procfile);
 }
 
 
 void deregister_process(void) {
-	FILE* procfile = fopen("/proc/mp2/status", "w");
+	FILE* procfile = fopen(procfile_name, "w");
 	fprintf(procfile, "D, %d\n", PID);
 	fclose(procfile); 
 }
@@ -65,10 +66,10 @@ int main(int argc, char* argv[]) {
 
 	int period = atoi(argv[1]);
 	int job_process_time = atoi(argv[2]);
-	register_process(period, job_process_time); //Proc filesystem
+	register_process(period, job_process_time);
 
-	//Proc filesystem: Verify the process was admitted if (!process in the list) exit 1;	
-	if (!read_status()) {
+	if (!was_registered()) {
+		printf("Process %d could not be registered.\n", PID);
 		exit(1);
 	}
 
@@ -77,9 +78,8 @@ int main(int argc, char* argv[]) {
 
 	//this is the real-time loop
 	int jobs = 5;
-	while(--jobs)
+	while(jobs--)
 	{
-		//wakeup_time=gettimeofday()-t0 and factorial computation
 		gettimeofday(&te, NULL);
 		long long sleep_time = (te.tv_sec*1000LL + te.tv_usec/1000);
 
@@ -95,7 +95,6 @@ int main(int argc, char* argv[]) {
 	    	factorial(20);
  	    }		
 			
-		//Proc filesystem. JobProcessTime=gettimeofday()-wakeup_time }
 		/*
 		gettimeofday(&te, NULL);
 		long long milliseconds = te.tv_sec*1000LL + te.tv_usec/1000;
