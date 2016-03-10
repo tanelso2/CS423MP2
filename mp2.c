@@ -11,6 +11,7 @@
 #include <linux/sched.h>
 #include <linux/timer.h>
 #include <linux/string.h>
+#include <linux/spinlock.h>
 #include "mp2_given.h"
 
 #define DEBUG 1
@@ -43,6 +44,7 @@ LIST_HEAD(task_list);
 // Locks
 DEFINE_MUTEX(list_lock);
 DEFINE_MUTEX(running_task_lock);
+DEFINE_SPINLOCK(spinning_lock);
 
 /*
  * Struct holding task variables
@@ -158,12 +160,15 @@ int dispatch_func(void* data) {
  */
 void timer_handler(unsigned long pid) {
     struct mp2_task_struct *iter;
+	unsigned long flags;
+	spin_lock_irqsave(&spinning_lock, flags);
     list_for_each_entry(iter, &task_list, list) {
         if(iter->pid == pid) {
             iter->task_state = TSK_READY;
         }
     }
     wake_up_process(dispatch_thread);
+	spin_unlock_irqrestore(&spinning_lock, flags);
 }
 
 /*
